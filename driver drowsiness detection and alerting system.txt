@@ -1,0 +1,75 @@
+import cv2
+import mediapipe as mp
+import time
+import RPi.GPIO as GPIO
+
+# Setup GPIO for buzzer
+BUZZER_PIN = 18
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(BUZZER_PIN, GPIO.OUT)
+
+# Mediapipe face mesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True)
+
+# Eye aspect ratio threshold
+EYE_AR_THRESH = 0.25
+EYE_AR_CONSEC_FRAMES = 15
+
+# Counter for drowsiness frames
+COUNTER = 0
+
+# Function to calculate EAR (Eye Aspect Ratio)
+def calculate_ear(landmarks, left_indices, right_indices):
+    import math
+    # Left eye
+    left = landmarks[left_indices[1]].y - landmarks[left_indices[5]].y
+    left_width = landmarks[left_indices[0]].x - landmarks[left_indices[3]].x
+    left_ear = abs(left / left_width)
+
+    # Right eye
+    right = landmarks[right_indices[1]].y - landmarks[right_indices[5]].y
+    right_width = landmarks[right_indices[0]].x - landmarks[right_indices[3]].x
+    right_ear = abs(right / right_width)
+
+    ear = (left_ear + right_ear) / 2.0
+    return ear
+
+# Eye landmark indices from mediapipe
+LEFT_EYE = [33, 159, 133, 145, 153, 154]
+RIGHT_EYE = [263, 386, 362, 374, 380, 385]
+
+# Start webcam
+cap = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(frame_rgb)
+
+    if results.multi_face_landmarks:
+        landmarks = results.multi_face_landmarks[0].landmark
+        ear = calculate_ear(landmarks, LEFT_EYE, RIGHT_EYE)
+
+        if ear < EYE_AR_THRESH:
+            COUNTER += 1
+            if COUNTER >= EYE_AR_CONSEC_FRAMES:
+                cv2.putText(frame, "DROWSINESS ALERT!", (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+                # Turn on buzzer
+                GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        else:
+            COUNTER = 0
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
+
+        cv2.putText(frame, f"EAR: {ear:.2f}", (500,50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0),2)
+
+    cv2.imshow("Driver Drowsiness Detection", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+GPIO.cleanup()
